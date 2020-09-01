@@ -1,0 +1,937 @@
+/**
+ * Code is taken from Computer Networking: A Top-Down Approach Featuring
+ * the Internet, second edition, copyright 1996-2002 J.F Kurose and K.W. Ross,
+ * All Rights Reserved.
+ **/
+
+import java.io.*;
+import java.net.*;
+import java.util.jar.Attributes;
+
+class TCPServer { 
+    private static String accountName = "";
+    private static String password = "";
+    private static String userID = "";
+    private static boolean loggedIn = false;
+    private static String streamType = "B";
+    private static String currentPath = System.getProperty("user.dir");
+    private static String basePath = System.getProperty("user.dir");
+	private static String loginMessage = "Please log in before using this command \n";
+	private static Boolean verified = false;
+	private static String tempPath;
+	private static String tempAccount;
+	private static String tempPassword;
+
+    public static void main(String argv[]) throws Exception 
+    { 
+		String clientSentence;
+		String toClient = null;
+		String cmd;
+		String args;
+		String positiveGreeting = "+MIT-localhost SFTP Service" + '\n';
+		String negativeGreeting = "-MIT-localhost Out to Lunch" + '\n';
+		Boolean endConnection = false;
+		//figure out when to send the negative response
+		ServerSocket welcomeSocket = new ServerSocket(6789);
+
+		Socket connectionSocket = welcomeSocket.accept();
+
+		BufferedReader inFromClient =
+			new BufferedReader(new
+				InputStreamReader(connectionSocket.getInputStream()));
+
+		DataOutputStream  outToClient =
+			new DataOutputStream(connectionSocket.getOutputStream());
+
+		outToClient.writeBytes(positiveGreeting);
+
+		while(true) {
+			//Need to make sure that the command is valid
+			clientSentence = inFromClient.readLine();
+			if(clientSentence.length() == 4){
+				cmd = clientSentence.substring(0, 4);
+				args = "end connection";
+			} else if(clientSentence.length() >= 4) {
+				cmd = clientSentence.substring(0, 4);
+				args = clientSentence.substring(5);
+			} else {
+				cmd = "unrecognised command";
+				args = "unrecognised arguments";
+			}
+
+			switch (cmd) {
+				case "USER":
+					toClient = USER(args);
+					break;
+				case "ACCT":
+					toClient = ACCT(args);
+					break;
+				case "PASS":
+					toClient = PASS(args);
+					break;
+				case "DONE":
+					toClient = "+(the message may be charge/accounting info)";
+					endConnection = true;
+					break;
+				case "TYPE":
+					toClient = TYPE(args);
+					break;
+				case "LIST":
+					toClient = LIST(args);
+					break;
+				case "CDIR":
+					toClient = CDIR(args);
+
+					if (toClient.charAt(0) == '+') {
+						while (toClient.charAt(0) == '+') {
+							outToClient.writeBytes(toClient);
+							clientSentence = inFromClient.readLine();
+							//might want to broaden this to cover commands that are too short as well
+							if (clientSentence.length() >= 4) {
+								cmd = clientSentence.substring(0, 4);
+								args = clientSentence.substring(5);
+							} else {
+								System.out.println("1");
+								cmd = "length too small";
+								args = "length too small";
+							}
+
+							if(cmd.equals("ACCT")) {
+								toClient = ACCT(args);
+							} else if (cmd.equals("PASS")) {
+								toClient = PASS(args);
+							} else if (cmd.equals("length too small")) {
+								toClient = "-Command needs to be at least 4 letters to be valid, try changing directory again \n";
+							} else {
+								toClient = "-Incorrect/invalid command, try changing directory again \n";
+							}
+						}
+
+						if (toClient.charAt(0) == '!'){
+							verified = true;
+							tempAccount = "";
+							tempPassword = "";
+							toClient = CDIR(tempPath);
+						} else {
+							accountName = tempAccount;
+							password = tempPassword;
+							tempAccount = "";
+							tempPassword = "";
+						}
+					}
+					break;
+				case "KILL":
+					toClient = KILL(args);
+					break;
+				case "NAME":
+					toClient = NAME(args);
+					String oldName = args;
+
+					if (toClient.charAt(0) == '+') {
+						outToClient.writeBytes(toClient);
+						clientSentence = inFromClient.readLine();
+
+						if (clientSentence.length() > 4) {
+							if (clientSentence.substring(0, 4).equals("TOBE")) {
+								String newName = clientSentence.substring(5);
+								toClient = TOBE(newName, oldName);
+							} else {
+								toClient = "-File wasn't renamed because the correct TOBE command was not given \n";
+							}
+						} else {
+							toClient = "-File wasn't renamed because the TOBE command was not given \n";
+						}
+					}
+					break;
+				case "RETR":
+					toClient = RETR(args);
+					break;
+				case "STOR":
+					toClient = STOR(args);
+					break;
+				default:
+					toClient = "-Command not recognised \n";
+					break;
+			}
+			
+			outToClient.writeBytes(toClient);
+			toClient = null;
+			if(endConnection){
+				connectionSocket.close();
+				break;
+			}
+		}
+    }
+
+    private static String USER(String inputID){
+		//Need to implement saved users
+		BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+						new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+				String verifiedUser = userData[3];
+
+				if(storedID.equals(inputID)){
+					if(verifiedUser.equals("V")){
+						accountName = storedName;
+						password = storedPassword;
+						loggedIn = true;
+						userID = inputID;
+						return "!" + inputID + " logged in \n";
+					} else {
+						userID = inputID;
+						return "+User-id valid, send account and password \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Invalid user-id, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	private static String ACCT(String inputAccount){
+		if(userID.equals("")){
+			return "-Please use USER command first \n";
+		}
+    	BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+					new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+
+				if(storedName.equals(inputAccount) && userID.equals(storedID)){
+					if(password.equals(storedPassword)){
+						accountName = storedName;
+						loggedIn = true;
+						return "!Account valid, logged in \n";
+					} else {
+						accountName = storedName;
+						return "+Account valid, send password \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Invalid account, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	private static String PASS(String inputPassword){
+		if(userID.equals("")){
+			return "-Please use USER command first \n";
+		}
+		BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+					new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+
+				if(storedPassword.equals(inputPassword) && userID.equals(storedID)){
+					if(accountName.equals(storedName)){
+						password = inputPassword;
+						loggedIn = true;
+						return "!Logged in \n";
+					} else {
+						password = inputPassword;
+						return "+Send account \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Wrong password, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	//Ensure that we have gotten the ! before letting people use this.
+	private static String TYPE(String type){
+    	if(!loggedIn){
+    		return loginMessage;
+		}
+    	//argument needs to be upercase to be counted
+    	if(type.equals("A")){
+    		streamType = type;
+			return "+Using Ascii mode \n";
+		} else if (type.equals("B")){
+    		streamType = type;
+			return "+Using Binary mode \n";
+		} else if (type.equals("C")){
+    		streamType = type;
+			return "+Using Continuous mode \n";
+		} else {
+    		return "-Type not valid \n";
+		}
+	}
+
+	//need to differentiate between a null directory path and an invalid directory path
+	private static String LIST(String path){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	String [] pathNames;
+    	String type = path.substring(0,1);
+    	String directory;
+		StringBuilder returnMessageMaker;
+		String returnMessage;
+
+		if(path.length() > 2) {
+			directory = path.substring(2);
+		} else {
+			directory = currentPath;
+		}
+
+		File f = new File(directory);
+		pathNames = f.list();
+
+    	if(type.equals("F")){
+    		try {
+    				returnMessageMaker = new StringBuilder("+" + directory + "\n");
+					System.out.println(returnMessageMaker);
+
+					if(!f.exists()){
+						return "-Path doesn't exist \n";
+					}
+
+					for(String pathName : pathNames) {
+						System.out.println(returnMessageMaker);
+						returnMessageMaker.append(pathName);
+						returnMessageMaker.append("\n");
+					}
+
+					returnMessage = returnMessageMaker.toString();
+					return returnMessage;
+			}catch (Exception e){
+    			e.printStackTrace();
+    			return "-" + e + "\n";
+			}
+		} else if (type.equals("V")){
+			try {
+				returnMessageMaker = new StringBuilder("+" + directory + "\n");
+				System.out.println(returnMessageMaker);
+
+				if(!f.exists()){
+					return "-Path doesn't exist \n";
+				}
+
+				for(String pathName : pathNames) {
+					returnMessageMaker.append(pathName);
+					returnMessageMaker.append("\n");
+				}
+
+				returnMessage = returnMessageMaker.toString();
+				return returnMessage;
+			}catch (Exception e){
+				e.printStackTrace();
+				return "-" + e + "\n";
+			}
+		} else {
+    		return "-invalid LIST command please try again \n";
+		}
+	}
+	//Need to decide when to ask for an account and password
+	//if the path isn't part of the base path (where the code is) then they need to log in again.
+	//Need to decide on reasons for why it can't connect to directory including not enough permissions to go into specific file
+	private static String CDIR(String path){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+		File f = new File(path);
+
+		if(f.exists()){
+			tempPath = path;
+
+			if(verified){
+				currentPath = tempPath;
+				tempPath = "";
+				return "!Changed working dir to " + currentPath + "\n";
+			} else {
+				tempAccount = accountName;
+				tempPassword = password;
+				accountName = "";
+				password = "";
+				return "+directory ok, send account/password \n";
+			}
+		} else {
+			return "-Can't connect to directory because: Directory doesn't exist \n";
+		}
+	}
+
+	//Might need to check if we are allowed to include folder or just files
+	private static String KILL(String file){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	File f = new File(currentPath + "/" + file);
+
+    	if (f.delete()) {
+			return "+" + file + " deleted \n";
+		} else {
+			return "-File does not exist \n";
+    	}
+    }
+
+	private static String NAME(String fileName){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	File f = new File(currentPath + "/" + fileName);
+
+    	if(f.exists()){
+			int index = fileName.indexOf(".");
+			if(index == -1){
+				return "-Unable to change file name. No file type specified \n";
+			}
+    		return "+File exists \n";
+		} else {
+			return "-Can't find " + fileName + "\n";
+		}
+	}
+
+	private static String TOBE(String newName, String oldName){
+    	File newFile = new File(currentPath + "/" + newName);
+    	File oldFile = new File(currentPath + "/" + oldName);
+
+    	if(newFile.exists()){
+    		return "-There is already a file with that name, try again \n";
+		}
+
+    	int index = newName.indexOf(".");
+    	if(index == -1){
+    		return "-Unable to change file name. No file type specified \n";
+		}
+
+		if(oldFile.renameTo(newFile)){
+			return "+change successful \n";
+		} else {
+			return "-error \n";
+		}
+	}
+
+	private static String RETR(String fileSpec){
+		if(!loggedIn){
+			return loginMessage;
+		}
+		File f = new File(currentPath + "/" +fileSpec);
+
+		if(f.exists()){
+			String length = Long.toString(f.length()) + "\n";
+			return length;
+		} else {
+			return "-File doesn't exist. Please try again \n";
+		}
+	}
+
+	private static String STOR(String fileSpec){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+		return "hello";
+	}
+} 
+
+/**
+ * Code is taken from Computer Networking: A Top-Down Approach Featuring
+ * the Internet, second edition, copyright 1996-2002 J.F Kurose and K.W. Ross,
+ * All Rights Reserved.
+ **/
+
+import java.io.*;
+import java.net.*;
+import java.util.jar.Attributes;
+
+class TCPServer { 
+    private static String accountName = "";
+    private static String password = "";
+    private static String userID = "";
+    private static boolean loggedIn = false;
+    private static String streamType = "B";
+    private static String currentPath = System.getProperty("user.dir");
+    private static String basePath = System.getProperty("user.dir");
+	private static String loginMessage = "Please log in before using this command \n";
+	private static Boolean verified = false;
+	private static String tempPath;
+	private static String tempAccount;
+	private static String tempPassword;
+
+    public static void main(String argv[]) throws Exception 
+    { 
+		String clientSentence;
+		String toClient = null;
+		String cmd;
+		String args;
+		String positiveGreeting = "+MIT-localhost SFTP Service" + '\n';
+		String negativeGreeting = "-MIT-localhost Out to Lunch" + '\n';
+		Boolean endConnection = false;
+		//figure out when to send the negative response
+		ServerSocket welcomeSocket = new ServerSocket(6789);
+
+		Socket connectionSocket = welcomeSocket.accept();
+
+		BufferedReader inFromClient =
+			new BufferedReader(new
+				InputStreamReader(connectionSocket.getInputStream()));
+
+		DataOutputStream  outToClient =
+			new DataOutputStream(connectionSocket.getOutputStream());
+
+		outToClient.writeBytes(positiveGreeting);
+
+		while(true) {
+			//Need to make sure that the command is valid
+			clientSentence = inFromClient.readLine();
+			if(clientSentence.length() == 4){
+				cmd = clientSentence.substring(0, 4);
+				args = "end connection";
+			} else if(clientSentence.length() >= 4) {
+				cmd = clientSentence.substring(0, 4);
+				args = clientSentence.substring(5);
+			} else {
+				cmd = "unrecognised command";
+				args = "unrecognised arguments";
+			}
+
+			switch (cmd) {
+				case "USER":
+					toClient = USER(args);
+					break;
+				case "ACCT":
+					toClient = ACCT(args);
+					break;
+				case "PASS":
+					toClient = PASS(args);
+					break;
+				case "DONE":
+					toClient = "+(the message may be charge/accounting info)";
+					endConnection = true;
+					break;
+				case "TYPE":
+					toClient = TYPE(args);
+					break;
+				case "LIST":
+					toClient = LIST(args);
+					break;
+				case "CDIR":
+					toClient = CDIR(args);
+
+					if (toClient.charAt(0) == '+') {
+						while (toClient.charAt(0) == '+') {
+							outToClient.writeBytes(toClient);
+							clientSentence = inFromClient.readLine();
+							//might want to broaden this to cover commands that are too short as well
+							if (clientSentence.length() >= 4) {
+								cmd = clientSentence.substring(0, 4);
+								args = clientSentence.substring(5);
+							} else {
+								System.out.println("1");
+								cmd = "length too small";
+								args = "length too small";
+							}
+
+							if(cmd.equals("ACCT")) {
+								toClient = ACCT(args);
+							} else if (cmd.equals("PASS")) {
+								toClient = PASS(args);
+							} else if (cmd.equals("length too small")) {
+								toClient = "-Command needs to be at least 4 letters to be valid, try changing directory again \n";
+							} else {
+								toClient = "-Incorrect/invalid command, try changing directory again \n";
+							}
+						}
+
+						if (toClient.charAt(0) == '!'){
+							verified = true;
+							tempAccount = "";
+							tempPassword = "";
+							toClient = CDIR(tempPath);
+						} else {
+							accountName = tempAccount;
+							password = tempPassword;
+							tempAccount = "";
+							tempPassword = "";
+						}
+					}
+					break;
+				case "KILL":
+					toClient = KILL(args);
+					break;
+				case "NAME":
+					toClient = NAME(args);
+					String oldName = args;
+
+					if (toClient.charAt(0) == '+') {
+						outToClient.writeBytes(toClient);
+						clientSentence = inFromClient.readLine();
+
+						if (clientSentence.length() > 4) {
+							if (clientSentence.substring(0, 4).equals("TOBE")) {
+								String newName = clientSentence.substring(5);
+								toClient = TOBE(newName, oldName);
+							} else {
+								toClient = "-File wasn't renamed because the correct TOBE command was not given \n";
+							}
+						} else {
+							toClient = "-File wasn't renamed because the TOBE command was not given \n";
+						}
+					}
+					break;
+				case "RETR":
+					toClient = RETR(args);
+					break;
+				case "STOR":
+					toClient = STOR(args);
+					break;
+				default:
+					toClient = "-Command not recognised \n";
+					break;
+			}
+			
+			outToClient.writeBytes(toClient);
+			toClient = null;
+			if(endConnection){
+				connectionSocket.close();
+				break;
+			}
+		}
+    }
+
+    private static String USER(String inputID){
+		//Need to implement saved users
+		BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+						new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+				String verifiedUser = userData[3];
+
+				if(storedID.equals(inputID)){
+					if(verifiedUser.equals("V")){
+						accountName = storedName;
+						password = storedPassword;
+						loggedIn = true;
+						userID = inputID;
+						return "!" + inputID + " logged in \n";
+					} else {
+						userID = inputID;
+						return "+User-id valid, send account and password \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Invalid user-id, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	private static String ACCT(String inputAccount){
+		if(userID.equals("")){
+			return "-Please use USER command first \n";
+		}
+    	BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+					new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+
+				if(storedName.equals(inputAccount) && userID.equals(storedID)){
+					if(password.equals(storedPassword)){
+						accountName = storedName;
+						loggedIn = true;
+						return "!Account valid, logged in \n";
+					} else {
+						accountName = storedName;
+						return "+Account valid, send password \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Invalid account, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	private static String PASS(String inputPassword){
+		if(userID.equals("")){
+			return "-Please use USER command first \n";
+		}
+		BufferedReader reader;
+		try{
+			reader = new BufferedReader(
+					new FileReader(System.getProperty("user.dir") + "/User-Data.txt"));
+
+			String line = reader.readLine();
+			while(line != null){
+				String [] userData = line.split(",");
+				String storedID = userData[0];
+				String storedName = userData[1];
+				String storedPassword = userData[2];
+
+				if(storedPassword.equals(inputPassword) && userID.equals(storedID)){
+					if(accountName.equals(storedName)){
+						password = inputPassword;
+						loggedIn = true;
+						return "!Logged in \n";
+					} else {
+						password = inputPassword;
+						return "+Send account \n";
+					}
+				}
+
+				line = reader.readLine();
+			}
+			reader.close();
+			return "-Wrong password, try again \n";
+		} catch (IOException e){
+			e.printStackTrace();
+			return "-" + e;
+		}
+	}
+
+	//Ensure that we have gotten the ! before letting people use this.
+	private static String TYPE(String type){
+    	if(!loggedIn){
+    		return loginMessage;
+		}
+    	//argument needs to be upercase to be counted
+    	if(type.equals("A")){
+    		streamType = type;
+			return "+Using Ascii mode \n";
+		} else if (type.equals("B")){
+    		streamType = type;
+			return "+Using Binary mode \n";
+		} else if (type.equals("C")){
+    		streamType = type;
+			return "+Using Continuous mode \n";
+		} else {
+    		return "-Type not valid \n";
+		}
+	}
+
+	//need to differentiate between a null directory path and an invalid directory path
+	private static String LIST(String path){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	String [] pathNames;
+    	String type = path.substring(0,1);
+    	String directory;
+		StringBuilder returnMessageMaker;
+		String returnMessage;
+
+		if(path.length() > 2) {
+			directory = path.substring(2);
+		} else {
+			directory = currentPath;
+		}
+
+		File f = new File(directory);
+		pathNames = f.list();
+
+    	if(type.equals("F")){
+    		try {
+    				returnMessageMaker = new StringBuilder("+" + directory + "\n");
+					System.out.println(returnMessageMaker);
+
+					if(!f.exists()){
+						return "-Path doesn't exist \n";
+					}
+
+					for(String pathName : pathNames) {
+						System.out.println(returnMessageMaker);
+						returnMessageMaker.append(pathName);
+						returnMessageMaker.append("\n");
+					}
+
+					returnMessage = returnMessageMaker.toString();
+					return returnMessage;
+			}catch (Exception e){
+    			e.printStackTrace();
+    			return "-" + e + "\n";
+			}
+		} else if (type.equals("V")){
+			try {
+				returnMessageMaker = new StringBuilder("+" + directory + "\n");
+				System.out.println(returnMessageMaker);
+
+				if(!f.exists()){
+					return "-Path doesn't exist \n";
+				}
+
+				for(String pathName : pathNames) {
+					returnMessageMaker.append(pathName);
+					returnMessageMaker.append("\n");
+				}
+
+				returnMessage = returnMessageMaker.toString();
+				return returnMessage;
+			}catch (Exception e){
+				e.printStackTrace();
+				return "-" + e + "\n";
+			}
+		} else {
+    		return "-invalid LIST command please try again \n";
+		}
+	}
+	//Need to decide when to ask for an account and password
+	//if the path isn't part of the base path (where the code is) then they need to log in again.
+	//Need to decide on reasons for why it can't connect to directory including not enough permissions to go into specific file
+	private static String CDIR(String path){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+		File f = new File(path);
+
+		if(f.exists()){
+			tempPath = path;
+
+			if(verified){
+				currentPath = tempPath;
+				tempPath = "";
+				return "!Changed working dir to " + currentPath + "\n";
+			} else {
+				tempAccount = accountName;
+				tempPassword = password;
+				accountName = "";
+				password = "";
+				return "+directory ok, send account/password \n";
+			}
+		} else {
+			return "-Can't connect to directory because: Directory doesn't exist \n";
+		}
+	}
+
+	//Might need to check if we are allowed to include folder or just files
+	private static String KILL(String file){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	File f = new File(currentPath + "/" + file);
+
+    	if (f.delete()) {
+			return "+" + file + " deleted \n";
+		} else {
+			return "-File does not exist \n";
+    	}
+    }
+
+	private static String NAME(String fileName){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+    	File f = new File(currentPath + "/" + fileName);
+
+    	if(f.exists()){
+			int index = fileName.indexOf(".");
+			if(index == -1){
+				return "-Unable to change file name. No file type specified \n";
+			}
+    		return "+File exists \n";
+		} else {
+			return "-Can't find " + fileName + "\n";
+		}
+	}
+
+	private static String TOBE(String newName, String oldName){
+    	File newFile = new File(currentPath + "/" + newName);
+    	File oldFile = new File(currentPath + "/" + oldName);
+
+    	if(newFile.exists()){
+    		return "-There is already a file with that name, try again \n";
+		}
+
+    	int index = newName.indexOf(".");
+    	if(index == -1){
+    		return "-Unable to change file name. No file type specified \n";
+		}
+
+		if(oldFile.renameTo(newFile)){
+			return "+change successful \n";
+		} else {
+			return "-error \n";
+		}
+	}
+
+	private static String RETR(String fileSpec){
+		if(!loggedIn){
+			return loginMessage;
+		}
+		File f = new File(currentPath + "/" +fileSpec);
+
+		if(f.exists()){
+			String length = Long.toString(f.length()) + "\n";
+			return length;
+		} else {
+			return "-File doesn't exist. Please try again \n";
+		}
+	}
+
+	private static String STOR(String fileSpec){
+		if(!loggedIn){
+			return loginMessage;
+		}
+
+		return "hello";
+	}
+} 
+
+

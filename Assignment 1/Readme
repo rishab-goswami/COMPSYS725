@@ -1,0 +1,2 @@
+Readme
+the user-data stores all of the user data. its structure is user-id, account, password. a new line dictates a new user.
