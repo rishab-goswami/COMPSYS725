@@ -4,6 +4,7 @@
  * All Rights Reserved.
  **/
 
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.*;
 import java.util.jar.Attributes;
@@ -147,9 +148,7 @@ class TCPServer {
 				case "RETR":
 					toClient = RETR(args);
 
-					if(!toClient.contains("-")){
-
-						String fileSize = toClient;
+					if(toClient.charAt(0) == '+'){
 						
 						while(!clientSentence.equals("SEND") && !clientSentence.equals("STOP")) {
 							outToClient.writeBytes(toClient);
@@ -166,12 +165,100 @@ class TCPServer {
 						if(clientSentence.equals("STOP")){
 							toClient = "+ok, RETR aborted";
 						} else {
-							String fileName = args;
+							String fileName = currentPath + "/" + args;
+							File f = new File(fileName);
+							byte[] buffer = new byte[(int) f.length()];
+
+							if(streamType.equals("A")) { //ASCII transfer
+								try (BufferedInputStream bufferedStream = new BufferedInputStream(new FileInputStream(f))){
+									int p = 0;
+
+									while((p = bufferedStream.read(buffer)) >= 0){
+										outToClient.write(buffer, 0, p);
+									}
+
+									bufferedStream.close();
+									outToClient.flush();
+								} catch (Exception e){
+									System.out.println("didn't work");
+									e.printStackTrace();
+								}
+							} else {
+								try{
+									DataOutputStream dos = new DataOutputStream(connectionSocket.getOutputStream());
+									FileInputStream fis = new FileInputStream(f);
+
+									while(fis.read(buffer) > 0){
+										dos.write(buffer);
+									}
+									fis.close();
+									dos.close();
+								} catch (Exception e){
+									System.out.println("didn't work");
+									e.printStackTrace();
+								}
+							}
+
 						}
 					}
 					break;
 				case "STOR":
 					toClient = STOR(args);
+					if(toClient.charAt(0) == '+'){
+						outToClient.writeBytes(toClient);
+						String argType = args.substring(0,3);
+						String fileName = args.substring(4);
+
+						clientSentence = inFromClient.readLine();
+						if(clientSentence.length() < 6){
+							toClient = "-Command not long enough \n";
+							continue;
+						}
+
+						cmd = clientSentence.substring(0,4);
+						args = clientSentence.substring(5);
+
+						if(cmd.equals("SIZE")){
+							int fileSize = Integer.parseInt(args);
+
+							toClient = "+ok, waiting for file \n";
+							outToClient.writeBytes(toClient);
+							try{
+								FileOutputStream fos = new FileOutputStream(currentPath + "/" + fileName, argType.equals("APP"));
+								if(streamType.equals("A")){
+									BufferedOutputStream bos = new BufferedOutputStream(fos);
+									for(int i=0; i < fileSize; i++){
+										bos.write(inFromClient.read());
+									}
+									bos.flush();
+									bos.close();
+								} else {
+									DataInputStream dis = new DataInputStream(connectionSocket.getInputStream());
+									byte[] buffer = new byte[fileSize];
+									int read = 0;
+									int totalRead = 0;
+									int remaining = fileSize;
+
+									while((read = dis.read(buffer, 0, Math.min(buffer.length, remaining))) > 0){
+										totalRead += read;
+										remaining -= read;
+										fos.write(buffer, 0, read);
+									}
+
+									fos.close();
+									dis.close();
+								}
+							} catch (Exception e) {
+								e.printStackTrace();
+								toClient = "-Unable to save file \n";
+							}
+						} else if (cmd.equals("STOP")){
+							toClient = "-STOR aborted \n";
+						} else {
+							toClient = "-Invalid command, expected either SIZE followed by size of file in digits or the STOP command";
+						}
+					}
+
 					break;
 				default:
 					toClient = "-Command not recognised \n";
@@ -211,6 +298,9 @@ class TCPServer {
 						return "!" + inputID + " logged in \n";
 					} else {
 						userID = inputID;
+						loggedIn = false;
+						accountName = "";
+						password = "";
 						return "+User-id valid, send account and password \n";
 					}
 				}
@@ -218,6 +308,9 @@ class TCPServer {
 				line = reader.readLine();
 			}
 			reader.close();
+			loggedIn = false;
+			accountName = "";
+			password = "";
 			return "-Invalid user-id, try again \n";
 		} catch (IOException e){
 			e.printStackTrace();
@@ -386,6 +479,7 @@ class TCPServer {
 		}
 	}
 	//Need to decide when to ask for an account and password
+	//Might need to check if it is a directory or a file
 	//if the path isn't part of the base path (where the code is) then they need to log in again.
 	//Need to decide on reasons for why it can't connect to directory including not enough permissions to go into specific file
 	private static String CDIR(String path){
@@ -397,6 +491,10 @@ class TCPServer {
 
 		if(f.exists()){
 			tempPath = path;
+
+			if(f.isFile()){
+				return "-Path specified is a file, please specify a directory";
+			}
 
 			if(verified){
 				currentPath = tempPath;
@@ -428,7 +526,7 @@ class TCPServer {
 			return "-File does not exist \n";
     	}
     }
-
+	//Assumes that the file is in the current directory, therefore doesn't need the full path.
 	private static String NAME(String fileName){
 		if(!loggedIn){
 			return loginMessage;
@@ -474,8 +572,15 @@ class TCPServer {
 		File f = new File(currentPath + "/" +fileSpec);
 
 		if(f.exists()){
-			String length = Long.toString(f.length()) + "\n";
-			return length;
+			String length = "+" + Long.toString(f.length()) + "\n";
+
+			if(streamType.equals("A") && isBinary(f)){
+				return "-File type is Binary and current TYPE is A. Switch to B or C or send a binary file \n";
+			} else if ((streamType.equals("B") || streamType.equals("C")) && !isBinary(f)){
+				return "-File type is ASCII and current TYPE is B or C. Please switch type to A or send binary file";
+			} else {
+				return length;
+			}
 		} else {
 			return "-File doesn't exist. Please try again \n";
 		}
@@ -486,7 +591,80 @@ class TCPServer {
 			return loginMessage;
 		}
 
-		return "hello";
+		if(fileSpec.length() < 8){
+			return "-STOR command needs 2 arguments, NEW | OLD | APP and file name";
+		}
+
+		File f = new File(currentPath + "/" + fileSpec.substring(4));
+
+		if(fileSpec.substring(0,3).equals("NEW")){
+			if(f.isFile()){
+				return "-File exists, but system doesn't suppose generations \n";
+			}else {
+				return "+File does not exist, will create new file \n";
+			}
+		} else if(fileSpec.substring(0,3).equals("OLD")){
+			if(f.isFile()){
+				return "+Will write over old file \n";
+			}else {
+				return "+Will create new file \n";
+			}
+		}else if(fileSpec.substring(0,3).equals("APP")){
+			if(f.isFile()){
+				return "+Will append to new file \n";
+			}else {
+				return "+Will create file \n";
+			}
+		} else {
+			return "-incorrect argument. the first argument needs to be NEW OLD OR APP \n";
+		}
+
+	}
+
+	private static Boolean isBinary(File file){
+    	FileInputStream fis;
+
+    	try {
+    		fis = new FileInputStream(file);
+    		int size = fis.available();
+
+    		if(size > 32) size = 32; //only checking the first 32 bytes
+			byte[] data = new byte[size];
+
+			fis.read(data);
+			fis.close();
+
+			int ascii = 0;
+			int binary = 0;
+
+			for(int i =0; i < data.length; i++){
+				byte b = data[i];
+
+				if(b < 0x09) {
+					return true;
+				}
+
+				if( b == 0x09 || b == 0x0A || b == 0x0C || b == 0x0D ){
+					ascii++;
+				}
+				else if( b >= 0x20  &&  b <= 0x7E ){
+					ascii++;
+				}
+				else {
+					binary++;
+				}
+			}
+
+			if(binary == 0) {
+				return false;
+			}
+
+			return (100* binary/(binary + ascii) > 95);
+		} catch (FileNotFoundException ex){
+		} catch (IOException io){
+		}
+    	return false;
 	}
 } 
+
 
